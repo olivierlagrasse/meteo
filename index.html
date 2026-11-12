@@ -2,7 +2,7 @@
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Météo semaine</title>
 <meta name="theme-color" content="#f4f1ea">
-<meta name="description" content="La semaine heure par heure à Castelnau-le-Lez : température, pluie, soleil, vent.">
+<meta name="description" content="La météo de la semaine heure par heure : température, pluie, soleil, vent.">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -18,12 +18,32 @@
   .legend { margin:12px 4px 0; font-size:12px; color:#6b7280; }
   .keys { display:flex; flex-wrap:wrap; gap:6px 16px; align-items:center; margin-top:8px; }
   .keys span { display:flex; align-items:center; gap:5px; }
+  .city { border:0; background:none; font:inherit; font-size:16px; font-weight:600; color:#1f2a37; padding:4px 0; cursor:pointer; display:flex; align-items:center; gap:4px; margin-top:4px; }
+  .city small { color:#9ca3af; font-weight:400; font-size:13px; margin-left:4px; }
+  .picker { background:#fff; border-radius:16px; padding:10px; margin-top:8px; box-shadow:0 6px 22px #0000001f; }
+  .prow { display:flex; gap:6px; }
+  .prow input { flex:1; min-width:0; border:1px solid #d6d0c4; border-radius:10px; padding:10px 12px; font:inherit; font-size:16px; background:#faf8f4; }
+  .prow input:focus { outline:2px solid #1f5fa8; border-color:transparent; }
+  .prow button, .favs button { border:0; border-radius:10px; background:#e6e1d6; font:inherit; font-size:14px; padding:0 12px; cursor:pointer; color:#1f2a37; }
+  #res div { padding:10px 8px; border-bottom:1px solid #f0ece4; cursor:pointer; font-size:15px; }
+  #res div:hover, #res div.sel { background:#f4f1ea; }
+  #res small { color:#6b7280; margin-left:6px; }
+  .favs { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .favs button { padding:7px 12px; }
+  .favs button.on { background:#1f2a37; color:#fff; }
+  .favs .lbl { width:100%; font-size:12px; color:#6b7280; }
   #tip { position:fixed; pointer-events:none; background:#1f2a37; color:#fff; border-radius:8px; padding:6px 9px; font-size:13px; display:none; }
   .snap { margin-top:12px; background:#fff4d6; border:1px solid #f1c24b; color:#5b4300; border-radius:12px; padding:10px 12px; font-size:13px; }
   body { padding-top:env(safe-area-inset-top); }
 </style></head>
 <body><div class="wrap">
   <h1>La semaine heure par heure</h1>
+  <button class="city" id="cityBtn" title="Changer de ville">📍 <span id="cityName"></span><small>changer ▾</small></button>
+  <div class="picker" id="picker" hidden>
+    <div class="prow"><input id="q" placeholder="Rechercher une ville…" autocomplete="off" enterkeyhint="search"><button id="geo" title="Utiliser ma position">◎ Ma position</button></div>
+    <div id="res"></div>
+    <div class="favs" id="favs"></div>
+  </div>
   <div class="sub" id="sub"></div>
   <div class="seg" id="seg"><button data-m="t" class="on">Température</button><button data-m="s">Soleil</button><button data-m="r">Pluie</button><button data-m="w">Vent</button></div>
   <div class="card"><svg id="hm" width="100%"></svg></div>
@@ -101,7 +121,18 @@ const DROP = '<svg width="13" height="16" viewBox="0 0 12 16"><path d="M6 0C4 4 
 const SUNI = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg>';
 
 
-const LOC = { name: 'Castelnau-le-Lez', lat: 43.6361, lon: 3.9014 };
+// Ville affichée : paramètres d'URL (?ville=&lat=&lon=), sinon dernier choix mémorisé, sinon Castelnau-le-Lez
+const DEFAULT_LOC = { name: 'Castelnau-le-Lez', lat: 43.6361, lon: 3.9014, admin: 'Hérault, France' };
+const LOC = (() => {
+  try {
+    const p = new URLSearchParams(location.search);
+    if (p.get('lat') && p.get('lon') && isFinite(+p.get('lat')) && isFinite(+p.get('lon')))
+      return { name: p.get('ville') || 'Lieu partagé', lat: +p.get('lat'), lon: +p.get('lon'), admin: '' };
+    const c = JSON.parse(localStorage.getItem('meteo-ville'));
+    if (c && isFinite(c.lat) && isFinite(c.lon)) return c;
+  } catch {}
+  return DEFAULT_LOC;
+})();
 const JOURS = ['dim','lun','mar','mer','jeu','ven','sam'];
 const JLONG = ['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
 const MLONG = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
@@ -110,8 +141,8 @@ async function getData(days = 7) {
     '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant,sunshine_duration,sunrise,sunset' +
     '&hourly=weather_code,temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_gusts_10m,wind_direction_10m,is_day,cloud_cover,sunshine_duration';
   for (let k = 0; k < 4; k++) { try { const r = await fetch(u); const j = await r.json(); if (r.ok && !j.error) { j.fetched_at = new Date().toISOString();
-      try { localStorage.setItem('meteo-semaine-last', JSON.stringify(j)); } catch {} return j; } } catch {} await new Promise(r => setTimeout(r, 1000)); }
-  try { const j = JSON.parse(localStorage.getItem('meteo-semaine-last')); if (j) { window.USING_CACHE = j.fetched_at; return j; } } catch {}
+      try { localStorage.setItem('meteo-semaine-last:' + LOC.lat + ',' + LOC.lon, JSON.stringify(j)); } catch {} return j; } } catch {} await new Promise(r => setTimeout(r, 1000)); }
+  try { const j = JSON.parse(localStorage.getItem('meteo-semaine-last:' + LOC.lat + ',' + LOC.lon)); if (j) { window.USING_CACHE = j.fetched_at; return j; } } catch {}
   throw new Error('données indisponibles');
 }
 function dayHours(d, i) { const date = d.daily.time[i]; const out = [];
@@ -120,6 +151,49 @@ const longDate = s => { const dt = new Date(s + 'T12:00:00Z'); return JLONG[dt.g
 
 </script>
 <script>
+// ---------- Choix de la ville ----------
+const esc = s => String(s).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+const same = (a, b) => Math.abs(a.lat - b.lat) < 0.01 && Math.abs(a.lon - b.lon) < 0.01;
+const recents = () => { try { const r = JSON.parse(localStorage.getItem('meteo-villes')); if (Array.isArray(r) && r.length) return r; } catch {} return [DEFAULT_LOC]; };
+function chooseCity(c) {
+  try {
+    localStorage.setItem('meteo-ville', JSON.stringify(c));
+    localStorage.setItem('meteo-villes', JSON.stringify([c, ...recents().filter(x => !same(x, c))].slice(0, 8)));
+  } catch {}
+  location.href = location.pathname;          // recharge sans paramètres d'URL, avec la nouvelle ville
+}
+document.getElementById('cityName').textContent = LOC.name;
+document.title = 'Météo semaine – ' + LOC.name;
+(() => {
+  const picker = document.getElementById('picker'), q = document.getElementById('q'), res = document.getElementById('res');
+  let found = [], hi = 0, timer;
+  const showFavs = () => { document.getElementById('favs').innerHTML = '<div class="lbl">Villes récentes</div>' +
+    recents().map((c, i) => `<button data-f="${i}" class="${same(c, LOC) ? 'on' : ''}">${esc(c.name)}</button>`).join(''); };
+  document.getElementById('cityBtn').onclick = () => { picker.hidden = !picker.hidden; if (!picker.hidden) { showFavs(); q.focus(); } };
+  document.getElementById('favs').onclick = e => { const b = e.target.closest('[data-f]'); if (b) chooseCity(recents()[+b.dataset.f]); };
+  const showRes = () => { res.innerHTML = found.length ? found.map((c, i) => `<div data-i="${i}" class="${i === hi ? 'sel' : ''}">${esc(c.name)}<small>${esc([c.admin1, c.country].filter(Boolean).join(', '))}</small></div>`).join('')
+    : '<div style="cursor:default;color:#6b7280">Aucune ville trouvée</div>'; };
+  const pick = i => { const c = found[i]; if (c) chooseCity({ name: c.name, lat: +c.latitude.toFixed(4), lon: +c.longitude.toFixed(4), admin: [c.admin1, c.country].filter(Boolean).join(', ') }); };
+  q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(async () => {
+    const s = q.value.trim(); if (s.length < 2) { res.innerHTML = ''; return; }
+    try { const j = await (await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(s)}&count=8&language=fr`)).json();
+      found = j.results || []; hi = 0; showRes(); } catch { res.innerHTML = '<div style="color:#b91c1c">Recherche impossible (pas de connexion ?)</div>'; }
+  }, 250); });
+  q.addEventListener('keydown', e => {
+    if (e.key === 'Enter') pick(hi);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); hi = (hi + (e.key === 'ArrowDown' ? 1 : found.length - 1)) % Math.max(1, found.length); showRes(); }
+    if (e.key === 'Escape') picker.hidden = true;
+  });
+  res.onclick = e => { const d = e.target.closest('[data-i]'); if (d) pick(+d.dataset.i); };
+  document.getElementById('geo').onclick = () => {
+    if (!navigator.geolocation) return alert('Géolocalisation indisponible sur cet appareil.');
+    document.getElementById('geo').textContent = '…';
+    navigator.geolocation.getCurrentPosition(
+      p => chooseCity({ name: 'Ma position', lat: +p.coords.latitude.toFixed(3), lon: +p.coords.longitude.toFixed(3), admin: '' }),
+      () => { document.getElementById('geo').textContent = '◎ Ma position'; alert('Position refusée ou introuvable.'); }, { timeout: 15000 });
+  };
+})();
+
 const hex = h => [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16));
 const lerpRamp = (ramp, f) => { f = Math.max(0, Math.min(1, f)) * (ramp.length - 1); const i = Math.min(ramp.length - 2, Math.floor(f)), t = f - i;
   const A = hex(ramp[i]), B = hex(ramp[i + 1]); return `rgb(${A.map((v, k) => Math.round(v + (B[k] - v) * t))})`; };
@@ -198,7 +272,7 @@ function drawLegend() {
   tLo = Math.floor(Math.min(...H.temperature_2m)); tHi = Math.ceil(Math.max(...H.temperature_2m));
   tMid = Math.round(H.temperature_2m.reduce((a, b) => a + b, 0) / H.temperature_2m.length);
   tMid = Math.max(tLo + 1, Math.min(tHi - 1, tMid));
-  document.getElementById('sub').textContent = LOC.name + ' · 7 jours · chaque case = 1 heure';
+  document.getElementById('sub').textContent = '7 jours · chaque case = 1 heure';
   draw();
   document.getElementById('seg').onclick = e => { const b = e.target.closest('button'); if (!b) return; mode = b.dataset.m;
     document.querySelectorAll('.seg button').forEach(x => x.classList.toggle('on', x === b)); draw(); };

@@ -1,3 +1,3 @@
 # Météo semaine
 
-La semaine heure par heure à Castelnau-le-Lez (température, pluie, soleil, vent). Données : [Open-Meteo](https://open-meteo.com).
+La météo de la semaine heure par heure, pour la ville de votre choix (température, pluie, soleil, vent). Données : [Open-Meteo](https://open-meteo.com).
