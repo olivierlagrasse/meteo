@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Météo semaine</title>
+<meta name="theme-color" content="#f4f1ea">
+<meta name="description" content="La semaine heure par heure à Castelnau-le-Lez : température, pluie, soleil, vent.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  body { margin:0; background:#f4f1ea; color:#1f2a37; font-family:"Segoe UI", Roboto, system-ui, sans-serif; }
+  .wrap { max-width:460px; margin:0 auto; padding:20px 14px 30px; }
+  h1 { font-size:23px; margin:0; font-weight:700; }
+  .sub { color:#6b7280; font-size:14px; margin-top:2px; }
+  .seg { display:flex; background:#e6e1d6; border-radius:12px; padding:3px; margin:16px 0 12px; }
+  .seg button { flex:1; border:0; background:none; padding:8px 0; border-radius:9px; font:inherit; font-size:14px; color:#4b5563; cursor:pointer; }
+  .seg button.on { background:#fff; color:#111; font-weight:600; box-shadow:0 1px 3px #0002; }
+  .card { background:#fff; border-radius:18px; padding:12px 8px; box-shadow:0 2px 10px #0000000d; }
+  .legend { margin:12px 4px 0; font-size:12px; color:#6b7280; }
+  .keys { display:flex; flex-wrap:wrap; gap:6px 16px; align-items:center; margin-top:8px; }
+  .keys span { display:flex; align-items:center; gap:5px; }
+  #tip { position:fixed; pointer-events:none; background:#1f2a37; color:#fff; border-radius:8px; padding:6px 9px; font-size:13px; display:none; }
+  .snap { margin-top:12px; background:#fff4d6; border:1px solid #f1c24b; color:#5b4300; border-radius:12px; padding:10px 12px; font-size:13px; }
+  body { padding-top:env(safe-area-inset-top); }
+</style></head>
+<body><div class="wrap">
+  <h1>La semaine heure par heure</h1>
+  <div class="sub" id="sub"></div>
+  <div class="seg" id="seg"><button data-m="t" class="on">Température</button><button data-m="s">Soleil</button><button data-m="r">Pluie</button><button data-m="w">Vent</button></div>
+  <div class="card"><svg id="hm" width="100%"></svg></div>
+  <div class="legend"><svg id="lg" width="100%"></svg><div class="keys" id="keys"></div></div>
+</div><div id="tip"></div>
+<script>
+'use strict';
+// ---------- Icônes météo (SVG) ----------
+const C_SUN = '#f9c22e', C_RAIN = '#7db4ea';
+function cloudPath(x, y, s, fill = '#eef2f7', shade = '#c9d3df') {
+  // nuage de largeur ~ 40*s, base en (x, y)
+  const p = (cx, cy, r) => `<circle cx="${x + cx * s}" cy="${y + cy * s}" r="${r * s}"/>`;
+  return `<g fill="${shade}" transform="translate(0 ${1.6 * s})">${p(10, -8, 8)}${p(21, -13, 11)}${p(32, -7, 8)}<rect x="${x + 2 * s}" y="${y - 8 * s}" width="${36 * s}" height="${8 * s}" rx="${4 * s}"/></g>` +
+         `<g fill="${fill}">${p(10, -8, 8)}${p(21, -13, 11)}${p(32, -7, 8)}<rect x="${x + 2 * s}" y="${y - 8 * s}" width="${36 * s}" height="${8 * s}" rx="${4 * s}"/></g>`;
+}
+function sun(cx, cy, r) {
+  let rays = '';
+  for (let a = 0; a < 360; a += 45) {
+    const t = a * Math.PI / 180;
+    rays += `<line x1="${cx + Math.cos(t) * r * 1.4}" y1="${cy + Math.sin(t) * r * 1.4}" x2="${cx + Math.cos(t) * r * 1.95}" y2="${cy + Math.sin(t) * r * 1.95}"/>`;
+  }
+  return `<g stroke="${C_SUN}" stroke-width="2.4" stroke-linecap="round">${rays}</g><circle cx="${cx}" cy="${cy}" r="${r}" fill="${C_SUN}"/>`;
+}
+function moon(cx, cy, r, stars = true) {
+  const st = stars ? [[-14, -12], [14, -14], [17, 6], [-17, 9]].map(([dx, dy]) =>
+    `<path d="M${cx + dx} ${cy + dy - 3}v6M${cx + dx - 3} ${cy + dy}h6" stroke="#9cc8f0" stroke-width="1.4"/>`).join('') : '';
+  return `${st}<circle cx="${cx}" cy="${cy}" r="${r}" fill="#123a63" stroke="#2c5d8f" stroke-width="1"/>` +
+    `<path d="M${cx} ${cy - r} A${r} ${r} 0 0 0 ${cx} ${cy + r} A${r * 0.3} ${r} 0 0 1 ${cx} ${cy - r}Z" fill="#fdf1c4"/>`;
+}
+function rain(x, y, n = 4, color = C_RAIN) {
+  let s = ''; for (let i = 0; i < n; i++) s += `<line x1="${x + i * 4.5}" y1="${y}" x2="${x + i * 4.5 - 3}" y2="${y + 8}"/>`;
+  return `<g stroke="${color}" stroke-width="2.2" stroke-linecap="round">${s}</g>`;
+}
+function snow(x, y, n = 3) {
+  let s = ''; for (let i = 0; i < n; i++) s += `<text x="${x + i * 7}" y="${y + 9}" font-size="10" fill="#e8f4ff">✱</text>`;
+  return s;
+}
+function icon(code, night, size = 64) {
+  const sky = (cx, cy, r) => night ? moon(cx, cy, r) : sun(cx, cy, r);
+  let g;
+  if (code === 0) g = night ? moon(32, 32, 13) : sun(32, 32, 11);
+  else if (code === 1) g = sky(38, 24, night ? 11 : 8) + cloudPath(8, 50, 0.65);
+  else if (code === 2) g = sky(40, 22, night ? 11 : 8) + cloudPath(6, 50, 0.95);
+  else if (code === 3) g = cloudPath(22, 38, 0.8, '#d7dee8', '#b4c0cf') + cloudPath(4, 50, 0.95);
+  else if (code === 45 || code === 48) g = cloudPath(10, 34, 0.9) + `<g stroke="#dfe6ee" stroke-width="2.4" stroke-linecap="round"><path d="M6 42h44M12 48h44M6 54h40"/></g>`;
+  else if (code >= 51 && code <= 57) g = cloudPath(22, 34, 0.75, '#d7dee8', '#b4c0cf') + cloudPath(4, 44, 0.95) + rain(14, 50, 3);
+  else if ((code >= 61 && code <= 67)) g = cloudPath(22, 34, 0.75, '#d7dee8', '#b4c0cf') + cloudPath(4, 44, 0.95) + rain(10, 50, code >= 63 ? 5 : 4);
+  else if (code >= 80 && code <= 82) g = sky(40, 20, night ? 11 : 8) + cloudPath(4, 44, 0.95) + rain(12, 50, code >= 81 ? 5 : 3);
+  else if ((code >= 71 && code <= 77) || code === 85 || code === 86) g = cloudPath(4, 42, 0.95) + snow(10, 46, 4);
+  else if (code >= 95) g = cloudPath(22, 34, 0.75, '#d7dee8', '#b4c0cf') + cloudPath(4, 44, 0.95) + rain(26, 50, 3) +
+    `<path d="M16 38l-5 11h6l-4 10 11-14h-6l4-7z" fill="#ff3fa4"/>`;
+  else g = cloudPath(4, 48, 0.95);
+  return `<svg width="${size}" height="${size}" viewBox="2 6 54 54">${g}</svg>`;
+}
+const WMO = { 0: 'Ciel clair', 1: 'Peu nuageux', 2: 'Partiellement nuageux', 3: 'Couvert', 45: 'Brouillard', 48: 'Brouillard givrant',
+  51: 'Bruine faible', 53: 'Bruine', 55: 'Bruine forte', 56: 'Bruine verglaçante', 57: 'Bruine verglaçante', 61: 'Pluie faible', 63: 'Pluie', 65: 'Pluie forte',
+  66: 'Pluie verglaçante', 67: 'Pluie verglaçante', 71: 'Neige faible', 73: 'Neige', 75: 'Neige forte', 77: 'Grains de neige',
+  80: 'Averses', 81: 'Averses', 82: 'Fortes averses', 85: 'Averses de neige', 86: 'Averses de neige', 95: 'Orage', 96: 'Orage avec grêle', 99: 'Orage avec grêle' };
+
+// ---------- Couleurs de température ----------
+const TSTOPS = [[-10, [158, 197, 245]], [0, [205, 238, 240]], [5, [214, 245, 208]], [10, [178, 236, 160]], [15, [186, 238, 126]],
+  [20, [230, 245, 122]], [25, [248, 227, 106]], [30, [249, 178, 90]], [35, [244, 123, 90]], [40, [230, 80, 90]]];
+function tcol(t) {
+  if (t <= TSTOPS[0][0]) return `rgb(${TSTOPS[0][1]})`;
+  for (let i = 0; i < TSTOPS.length - 1; i++) {
+    const [a, ca] = TSTOPS[i], [b, cb] = TSTOPS[i + 1];
+    if (t <= b) { const w = (t - a) / (b - a); return `rgb(${ca.map((v, k) => Math.round(v + (cb[k] - v) * w))})`; }
+  }
+  return `rgb(${TSTOPS[TSTOPS.length - 1][1]})`;
+}
+const arrow = dir => `<svg width="22" height="16" viewBox="-11 -8 22 16"><g transform="rotate(${(dir + 180 + 270) % 360})"><path d="M-8 0h12" stroke="#fff" stroke-width="2.4"/><path d="M9 0 2 -5v10z" fill="#fff"/></g></svg>`;
+const DIRS = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+const dirName = d => DIRS[Math.round(d / 45) % 8];
+const DROP = '<svg width="13" height="16" viewBox="0 0 12 16"><path d="M6 0C4 4 1 7 1 10.5a5 5 0 0 0 10 0C11 7 8 4 6 0z" fill="#fff"/></svg>';
+const SUNI = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8"><circle cx="12" cy="12" r="4.5"/><path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3M4.6 4.6l2.1 2.1M17.3 17.3l2.1 2.1M4.6 19.4l2.1-2.1M17.3 6.7l2.1-2.1"/></svg>';
+
+
+const LOC = { name: 'Castelnau-le-Lez', lat: 43.6361, lon: 3.9014 };
+const JOURS = ['dim','lun','mar','mer','jeu','ven','sam'];
+const JLONG = ['Dimanche','Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi'];
+const MLONG = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+async function getData(days = 7) {
+  const u = 'https://api.open-meteo.com/v1/forecast?latitude=' + LOC.lat + '&longitude=' + LOC.lon + '&timezone=auto&forecast_days=' + days +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant,sunshine_duration,sunrise,sunset' +
+    '&hourly=weather_code,temperature_2m,apparent_temperature,precipitation,precipitation_probability,wind_speed_10m,wind_gusts_10m,wind_direction_10m,is_day,cloud_cover,sunshine_duration';
+  for (let k = 0; k < 4; k++) { try { const r = await fetch(u); const j = await r.json(); if (r.ok && !j.error) { j.fetched_at = new Date().toISOString();
+      try { localStorage.setItem('meteo-semaine-last', JSON.stringify(j)); } catch {} return j; } } catch {} await new Promise(r => setTimeout(r, 1000)); }
+  try { const j = JSON.parse(localStorage.getItem('meteo-semaine-last')); if (j) { window.USING_CACHE = j.fetched_at; return j; } } catch {}
+  throw new Error('données indisponibles');
+}
+function dayHours(d, i) { const date = d.daily.time[i]; const out = [];
+  d.hourly.time.forEach((t, k) => { if (t.startsWith(date)) out.push(k); }); return out; }
+const longDate = s => { const dt = new Date(s + 'T12:00:00Z'); return JLONG[dt.getUTCDay()] + ' ' + dt.getUTCDate() + ' ' + MLONG[dt.getUTCMonth()]; };
+
+</script>
+<script>
+const hex = h => [1, 3, 5].map(k => parseInt(h.slice(k, k + 2), 16));
+const lerpRamp = (ramp, f) => { f = Math.max(0, Math.min(1, f)) * (ramp.length - 1); const i = Math.min(ramp.length - 2, Math.floor(f)), t = f - i;
+  const A = hex(ramp[i]), B = hex(ramp[i + 1]); return `rgb(${A.map((v, k) => Math.round(v + (B[k] - v) * t))})`; };
+// Température : divergent froid ↔ chaud, centré sur la moyenne de la semaine, borné au min/max réel de la semaine
+const COLD = ['#24508f', '#3f78bd', '#7eaad6', '#bcd4ea'], MID = '#efece6', WARM = ['#f7d3ae', '#f0a368', '#dc6a33', '#a8381a'];
+const RAMP_S = ['#f3f1ec', '#fbe9a6', '#fdd65a', '#f8b912', '#e09400'];   // soleil : une teinte, clair → intense
+const RAMP_R = ['#eef4fb', '#c6dbef', '#8fbbe0', '#4f8fcc', '#1f5fa8', '#0b3a75'];
+const RAMP_W = ['#f3f0f7', '#d9cfe8', '#b49fd1', '#8a6bb8', '#5f3e98', '#3a2168'];
+let mode = 't', d, rows, tLo, tHi, tMid;
+const tc = v => v <= tMid ? lerpRamp([...COLD, MID], (v - tLo) / (tMid - tLo)) : lerpRamp([MID, ...WARM], (v - tMid) / (tHi - tMid));
+const sunFrac = k => d.hourly.is_day[k] ? Math.min(1, (d.hourly.sunshine_duration[k] || 0) / 3600) : 0;
+
+function sunGlyph(cx, cy, f) {          // soleil dont la taille suit la part d'ensoleillement de l'heure
+  const r = 1.8 + f * 3.4;
+  return `<g pointer-events="none"><circle cx="${cx}" cy="${cy}" r="${r}" fill="#ffcc1f" stroke="#d97a00" stroke-width="1.6"/><circle cx="${cx - r * .3}" cy="${cy - r * .3}" r="${r * .3}" fill="#fff6c8"/></g>`;
+}
+function draw() {
+  const H = d.hourly, W = 412, L = 58, R = 44, top = 22, cw = (W - L - R) / 24, ch = 36;
+  let s = '';
+  const nowLoc = new Date(Date.now() + d.utc_offset_seconds * 1000).toISOString().slice(0, 13);
+  const nowH = rows[0].findIndex(k => H.time[k].slice(0, 13) === nowLoc);
+  for (const h of [0, 6, 12, 18]) if (nowH < 0 || Math.abs(h - nowH) > 4)
+    s += `<text x="${L + h * cw}" y="14" font-size="11" fill="#6b7280">${h}h</text>`;
+  rows.forEach((ks, i) => {
+    const y = top + i * ch, dt = new Date(d.daily.time[i] + 'T12:00:00Z');
+    s += `<text x="0" y="${y + 15}" font-size="14" font-weight="600" fill="#1f2a37">${JOURS[dt.getUTCDay()]} ${dt.getUTCDate()}</text>`;
+    s += `<text x="0" y="${y + 30}" font-size="11"><tspan fill="#2f63a6">${Math.round(d.daily.temperature_2m_min[i])}°</tspan><tspan fill="#9ca3af"> · </tspan><tspan fill="#b5441c">${Math.round(d.daily.temperature_2m_max[i])}°</tspan></text>`;
+    ks.forEach((k, h) => {
+      const x = L + h * cw, cx = x + cw / 2 - .7, cy = y + ch / 2 - 2, past = H.time[k].slice(0, 13) < nowLoc;
+      const fill = mode === 't' ? tc(H.temperature_2m[k]) : mode === 's' ? lerpRamp(RAMP_S, sunFrac(k))
+        : mode === 'r' ? lerpRamp(RAMP_R, (H.precipitation[k] || 0) / 3) : lerpRamp(RAMP_W, H.wind_gusts_10m[k] / 70);
+      s += `<rect class="c" data-k="${k}" x="${x}" y="${y}" width="${cw - 1.5}" height="${ch - 4}" rx="3" fill="${fill}" opacity="${past ? .4 : 1}"/>`;
+      if (mode === 't' || mode === 's') {
+        const p = H.precipitation[k] || 0;
+        if (p >= 0.1) s += `<circle cx="${cx}" cy="${cy}" r="${Math.min(5.5, 1.8 + Math.sqrt(p) * 1.8)}" fill="#1f5fa8" stroke="#fff" stroke-width="1" pointer-events="none" opacity="${past ? .5 : 1}"/>`;
+        else if (sunFrac(k) >= 0.25) s += sunGlyph(cx, cy, sunFrac(k)).replace('<g ', `<g opacity="${past ? .5 : 1}" `);
+      }
+      if (!H.is_day[k]) s += `<rect x="${x}" y="${y + ch - 7}" width="${cw - 1.5}" height="3" fill="#1f2a37" opacity=".3" pointer-events="none"/>`;
+    });
+    // totaux du jour : soleil + pluie
+    const sun = d.daily.sunshine_duration[i] / 3600, rain = d.daily.precipitation_sum[i];
+    s += `<text x="${W - R + 6}" y="${y + 14}" font-size="12" font-weight="600" fill="${sun >= 5 ? '#c27c00' : '#9ca3af'}">☀ ${Math.round(sun)}h</text>`;
+    s += `<text x="${W - R + 6}" y="${y + 29}" font-size="12" font-weight="600" fill="${rain >= 1 ? '#1f5fa8' : '#9ca3af'}">${rain < 0.1 ? 'sec' : Math.round(rain) + ' mm'}</text>`;
+  });
+  rows.forEach((ks, i) => ks.forEach((k, h) => { if (H.time[k].slice(0, 13) === nowLoc) {
+    const x = L + h * cw + cw / 2, y = top + i * ch;
+    s += `<line x1="${x}" x2="${x}" y1="${y - 4}" y2="${y + ch - 2}" stroke="#111" stroke-width="2"/><text x="${x + 4}" y="${y - 6}" font-size="10" text-anchor="end" fill="#111">maintenant</text>`; } }));
+  const svg = document.getElementById('hm'); svg.setAttribute('viewBox', `0 0 ${W} ${top + rows.length * ch}`); svg.innerHTML = s;
+  drawLegend();
+}
+function drawLegend() {
+  const W = 412, x0 = 14, x1 = W - 14, lg = document.getElementById('lg'); let s = '', stops = '';
+  const bar = (fn, ticks, lab) => {
+    for (let q = 0; q <= 40; q++) stops += `<stop offset="${q / 40}" stop-color="${fn(q / 40)}"/>`;
+    s += `<defs><linearGradient id="lgg">${stops}</linearGradient></defs><rect x="${x0}" y="4" width="${x1 - x0}" height="12" rx="6" fill="url(#lgg)"/>`;
+    ticks.forEach(([f, t]) => { const x = x0 + f * (x1 - x0); s += `<line x1="${x}" x2="${x}" y1="16" y2="21" stroke="#9ca3af"/><text x="${x}" y="33" font-size="11" text-anchor="middle" fill="#4b5563">${t}</text>`; });
+    if (lab) s += `<text x="${W / 2}" y="48" font-size="11" text-anchor="middle" fill="#6b7280">${lab}</text>`;
+  };
+  if (mode === 't') {
+    const ticks = []; for (let v = Math.ceil(tLo); v <= tHi; v++) if (v === tMid || ((v - Math.ceil(tLo)) % 2 === 0 && Math.abs(v - tMid) > 1)) ticks.push([(v - tLo) / (tHi - tLo), v + '°']);
+    bar(f => tc(tLo + f * (tHi - tLo)), ticks, `échelle adaptée à la semaine · moyenne ${tMid}° au centre`);
+  } else if (mode === 's') bar(f => lerpRamp(RAMP_S, f), [[0, '0 min'], [.25, '15'], [.5, '30'], [.75, '45'], [1, '60 min']], 'minutes de soleil dans l’heure');
+  else if (mode === 'r') bar(f => lerpRamp(RAMP_R, f), [[0, '0'], [1 / 3, '1'], [2 / 3, '2'], [1, '3+ mm/h']], '');
+  else bar(f => lerpRamp(RAMP_W, f), [[0, '0'], [2 / 7, '20'], [4 / 7, '40'], [6 / 7, '60'], [1, '70+ km/h']], 'rafales');
+  lg.setAttribute('viewBox', `0 0 ${W} 52`); lg.innerHTML = s;
+  document.getElementById('keys').innerHTML = (mode === 't' || mode === 's') ?
+    `<span><svg width="14" height="14"><circle cx="7" cy="7" r="5" fill="#1f5fa8" stroke="#fff"/></svg>pluie (taille = mm)</span>
+     <span><svg width="18" height="18">${sunGlyph(9, 9, 1)}</svg>soleil (taille = minutes)</span><span>▁ nuit</span>` : '';
+}
+(async () => {
+  d = await getData(7); const H = d.hourly;
+  // ajoute l'ensoleillement horaire (non demandé par common.js)
+  const u = `https://api.open-meteo.com/v1/forecast?latitude=${LOC.lat}&longitude=${LOC.lon}&timezone=auto&forecast_days=7&hourly=sunshine_duration`;
+  if (!H.sunshine_duration) H.sunshine_duration = (await (await fetch(u)).json()).hourly.sunshine_duration;
+  rows = d.daily.time.map((_, i) => dayHours(d, i));
+  tLo = Math.floor(Math.min(...H.temperature_2m)); tHi = Math.ceil(Math.max(...H.temperature_2m));
+  tMid = Math.round(H.temperature_2m.reduce((a, b) => a + b, 0) / H.temperature_2m.length);
+  tMid = Math.max(tLo + 1, Math.min(tHi - 1, tMid));
+  document.getElementById('sub').textContent = LOC.name + ' · 7 jours · chaque case = 1 heure';
+  draw();
+  document.getElementById('seg').onclick = e => { const b = e.target.closest('button'); if (!b) return; mode = b.dataset.m;
+    document.querySelectorAll('.seg button').forEach(x => x.classList.toggle('on', x === b)); draw(); };
+  const tip = document.getElementById('tip');
+  document.getElementById('hm').addEventListener('pointermove', e => { const c = e.target.closest('.c'); if (!c) { tip.style.display = 'none'; return; }
+    const k = +c.dataset.k; tip.innerHTML = `${H.time[k].slice(11)} · ${H.temperature_2m[k].toFixed(1)}° · ☀ ${Math.round(sunFrac(k) * 60)} min · ${H.precipitation[k].toFixed(1)} mm · rafales ${Math.round(H.wind_gusts_10m[k])}`;
+    tip.style.display = 'block'; tip.style.left = Math.min(e.clientX + 10, innerWidth - 260) + 'px'; tip.style.top = e.clientY - 40 + 'px'; });
+  if (window.USING_CACHE) { const t = new Date(window.USING_CACHE); const b = document.createElement('div'); b.className = 'snap';
+    b.innerHTML = `📴 Hors connexion : dernières prévisions du <b>${t.toLocaleDateString('fr-FR')} à ${t.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</b>.`;
+    document.getElementById('sub').after(b); }
+  document.body.dataset.ready = 1;
+})();
+
+let hiddenAt = 0; document.addEventListener('visibilitychange', () => { if (document.hidden) hiddenAt = Date.now(); else if (hiddenAt && Date.now() - hiddenAt > 30 * 60000) location.reload(); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+</script></body></html>
